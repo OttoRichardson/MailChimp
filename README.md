@@ -11,13 +11,14 @@ Fetch all campaign data up to the current date and save it to a JSON file. This 
 
   - Click details per campaign
 
-  - Email activity per campaign
+  - subscriber activity per campaign
 
 - describes any API errors or exceptions if present.
 
 - Saves data in structured JSON files for further analysis.
 
 
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/mailchimp%20workings.png)
 
 ## Requirements
 
