@@ -26,7 +26,7 @@ Mailchimp Marketing Python SDK: mailchimp-marketing
 ```
 pip install mailchimp-marketing
 ```
-referance: https://github.com/mailchimp/mailchimp-marketing-python?utm_source=chatgpt.com
+referance: https://github.com/mailchimp/mailchimp-marketing-python?
 
 ------
 
