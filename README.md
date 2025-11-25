@@ -30,7 +30,7 @@ referance: https://github.com/mailchimp/mailchimp-marketing-python?utm_source=ch
 
 ------
 
-How It Works
+## How It Works
 
 1. It calculates the date range:
   - since_create_time: 60 days ago by default.
@@ -51,3 +51,28 @@ How It Works
 file format: ```data/campaigns_<start_date>_to_<end_date>.json```
 
 If no campaigns are found, the script prints No campaigns and exits.
+
+## Future Improvements
+
+Daily Scan for New Campaigns
+
+Each time the script runs, it looks back over a defined time window, Mailchimp returns any campaigns that were created or sent during that time.
+
+APpend and Save Campaigns to a Persistent List
+```
+{
+  "id": "abc123",
+  "title": "Weekly Newsletter",
+  "send_time": "2024-02-12T13:02:55+00:00",
+}
+
+```
+
+Once we have the master list of campaign IDs, the next part script updates to the most recent activitys by looping through ids
+
+- Fetches detailed click data. ```mailchimp.reports.get_campaign_click_details(campaign_id)```
+- Fetches email activity data.
+  ```mailchimp.reports.get_email_activity_for_campaign(campaign_id)```
+
+  output each campaign is a new json file
+
