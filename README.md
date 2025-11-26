@@ -177,3 +177,206 @@ for campaign in campaigns:
    output_file = f"data/campaigns/{camp_id}.json"
 
 ```
+
+
+# Load
+
+After extracting and processing event data from Amplitude, the next step is to upload the JSON files to an S3 bucket for storage, backup, or further processing. This step ensures that the data is accessible to other systems and keeps local storage clean.
+
+## Requirements
+
+```
+import os from dotenv import load_dotenv import boto3
+```
+
+
+
+## Set Up
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/Load%20mailchimp.png)
+
+Create S3 client
+```
+s3_client = boto3.client( 's3', aws_access_key_id=aws_access_key, aws_secret_access_key=AWS_ACCESS_SECRET_KEY )
+```
+
+### Collect all filenames in the output folder
+
+```
+files_to_upload = [] for root, _, filenames in os.walk(output_folder): files_to_upload.extend(filenames)
+
+for file in files_to_upload: aws_file_destination = "python-import/" + file output_path = os.path.join(output_folder, file) s3_client.upload_file(output_path, bucket, aws_file_destination) print(f"Uploaded: {file}")
+```
+
+## SNOWPIPE AND STORAGE INTERGRATION 
+A Storage Integration is a Snowflake object that allows Snowflake to securely read data from Amazon S3 without storing long-lived AWS credentials
+
+Snowflake creates a short-lived AWS IAM role session, and AWS enforces access using IAM trust policies
+
+```
+CREATE OR REPLACE STORAGE INTEGRATION OR_MAILCHIMP_STORAGE_INTEGRATION
+  TYPE = EXTERNAL_STAGE
+  STORAGE_PROVIDER = 'S3'
+  ENABLED = TRUE
+  STORAGE_AWS_ROLE_ARN = 'arn:aws:iam:::role/ottorichardson-snowflake-amplitude-python'
+  STORAGE_ALLOWED_LOCATIONS = ('s3://ottorichardson-amplitude-storage/mailchimp/');
+
+```
+
+After creation, inspect the integration:
+``` DESC INTEGRATION OR_MAILCHIMP_STORAGE_INTEGRATION; ```
+
+This returns values you must include in the AWS role trust policy:
+
+STORAGE_AWS_EXTERNAL_ID
+
+STORAGE_AWS_IAM_USER_ARN
+
+### File Format (JSON)
+We define a dedicated JSON file format to ensure consistent parsing—especially the STRIP_OUTER_ARRAY option, which expands arrays of objects into individual rows.
+
+```
+CREATE OR REPLACE FILE FORMAT ottorichardson_json_format
+  TYPE = 'JSON'
+  STRIP_OUTER_ARRAY = TRUE;
+
+```
+
+### SNOWPIPE 
+
+Event notifications (S3  → SQS → Snowflake)
+to set this up
+Go to s3 bucket, click on Properties and scroll to event notificationsConfigure
+
+In Snowflake:
+
+```
+CREATE OR REPLACE PIPE OR_RAW_MAILCHIMP_PIPE
+AUTO_INGEST = TRUE
+AS
+COPY INTO RAW_MAILCHIMP_JSON
+FROM @OR_MAILCHIMP_STAGE
+FILE_FORMAT = (FORMAT_NAME = ottorichardson_json_format)
+;
+```
+
+## STAGING
+
+
+### Campaign-level table
+
+Granularity: One row per campaign.
+
+- Each row represents a single campaign.
+
+- No nested arrays—this is your “base” table.
+
+Candidate unique key:
+
+- campaign_id (Mailchimp already provides this)
+
+| Column           | Purpose                    | Key?          |
+| ---------------- | -------------------------- | ------------- |
+| campaign_id      | Unique campaign ID         | ✅ Primary key |
+| title            | Campaign title             |               |
+| send_time        | Send time                  |               |
+| last_updated     | Last updated timestamp     |               |
+| total_clicks     | Total clicks               |               |
+| total_urls       | Count of URLs              |               |
+| total_recipients | Count of recipients/emails |               |
+
+```
+CREATE OR REPLACE TABLE BASE_CAMPAIGNS AS
+SELECT
+    json_data:campaign_id::STRING       AS campaign_id, --PRIMARY_KEY
+    json_data:title::STRING             AS title,
+    json_data:send_time::STRING  AS send_time,
+    json_data:last_updated::STRING AS last_updated,
+    json_data:click_details:total_items::NUMBER AS total_clicks,
+    json_data:email_activity:total_items::NUMBER AS total_recipients
+FROM RAW_MAILCHIMP_JSON
+;
+
+```
+
+
+### URL-level click details
+
+Granularity: One row per campaign per URL.
+
+- Each row is a URL clicked in a campaign.
+
+- Nested array urls_clicked is flattened.
+
+Candidate unique key:
+- url_id
+
+| Column                  | Purpose                 | Key?     |
+| ----------------------- | ----------------------- | -------- |
+| campaign_id             | FK to campaign          |          |
+| url_id                  | URL identifier          | ✅  Primary key     |
+| url                     | URL string              |          |
+| total_clicks            | Total clicks            |          |
+| unique_clicks           | Unique clicks           |          |
+| click_percentage        | Click %                 |          |
+| unique_click_percentage | Unique click %          |          |
+| last_click              | Timestamp of last click |          |
+
+
+```
+CREATE OR REPLACE TABLE BASE_URL_CLICKS AS
+SELECT
+    c.json_data:campaign_id::STRING AS campaign_id,
+    url.value:id::STRING         AS url_id,   -- PRIMARY_KEY
+    url.value:url::STRING        AS url,
+    url.value:total_clicks::NUMBER AS total_clicks,
+    url.value:unique_clicks::NUMBER AS unique_clicks,
+    url.value:click_percentage::FLOAT AS click_percentage,
+    url.value:unique_click_percentage::FLOAT AS unique_click_percentage,
+    url.value:last_click::TIMESTAMP_NTZ AS last_click
+FROM RAW_MAILCHIMP_JSON c,
+     LATERAL FLATTEN(input => c.json_data:click_details:urls_clicked) url;
+```
+
+### Email-level activity
+
+Granularity: One row per email per activity.
+
+- Flatten emails array and then activity array.
+
+Candidate unique key:
+
+- campaign_id + email_id + action + timestamp
+  ``` MD5(email.value:campaign_id::STRING || email.value:email_id::STRING || a.value:action::STRING || TO_VARCHAR(a.value:timestamp)) AS email_activity_hash```
+
+| Column              | Purpose                             | Key?     |
+| ------------------- | ----------------------------------- | -------- |
+| campaign_id         | FK to campaign                      | ✅        |
+| email_id            | Recipient email ID                  | ✅        |
+| email_address       | Email address                       |          |
+| list_id             | Mailchimp list ID                   |          |
+| list_is_active      | List status                         |          |
+| action              | Activity action (click, open, etc.) | ✅        |
+| timestamp           | Timestamp of activity               | ✅        |
+| ip                  | IP address from event               |          |
+| email_activity_hash | Hash for uniqueness |✅  Primary key    | 
+
+```
+
+CREATE OR REPLACE TABLE BASE_EMAIL_ACTIVITY AS
+SELECT
+    MD5(e.value:campaign_id::STRING || e.value:email_id::STRING || a.value:action::STRING || TO_VARCHAR(a.value:timestamp)) AS activity_id,
+    e.value:campaign_id::STRING    AS campaign_id,
+    e.value:list_id::STRING        AS list_id,
+    e.value:list_is_active::BOOLEAN AS list_is_active,
+    e.value:email_id::STRING       AS email_id,
+    e.value:email_address::STRING  AS email_address,
+    a.value:action::STRING         AS action,
+    a.value:timestamp::TIMESTAMP_NTZ AS timestamp,
+    a.value:ip::STRING             AS ip
+FROM RAW_MAILCHIMP_JSON c,
+     LATERAL FLATTEN(input => c.json_data:email_activity:emails) e,
+     LATERAL FLATTEN(input => e.value:activity) a;
+
+     SELECT * FROM BASE_EMAIL_ACTIVITY;
+```
