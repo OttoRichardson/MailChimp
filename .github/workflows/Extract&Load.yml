@@ -2,8 +2,8 @@ name: MailChimp-Extraction
 
 on:
   schedule:
-  #EVERY 5 MINUTES
-    - cron: '*/50 * * * *' 
+  #ONCE A DAY AT 8:00
+    - cron: '0 8 * * *' 
   #ALLOW THE WORKFLOW TO RUN MANUALLY
   workflow_dispatch:
 
@@ -22,7 +22,7 @@ jobs:
       - name: Install packages
         run: pip install -r requirements.txt
   
-      - name: run the python script
+      - name: run the Extract script
         env:
           MAILCHIMP_API_KEY: ${{secrets.MAILCHIMP_API_KEY}}
           MAILCHIMP_SERVER_PREFIX: ${{secrets.MAILCHIMP_SERVER_PREFIX}}
@@ -32,4 +32,13 @@ jobs:
           AWS_BUCKET_NAME: ${{secrets.AWS_BUCKET_NAME}}
           SUMMARY_FILE_NAME: ${{secrets.SUMMARY_FILE_NAME}}
         run: python Extract.py
+
+      - name: run the Load script
+        env:
+          AWS_ACCESS_KEY: ${{secrets.AWS_ACCESS_KEY}}
+          AWS_ACCESS_SECRET_KEY: ${{secrets.AWS_ACCESS_SECRET_KEY}}
+          AWS_REGION: ${{secrets.AWS_REGION}}
+          AWS_BUCKET_NAME: ${{secrets.AWS_BUCKET_NAME}}
+        run: python load.py
+          
           
