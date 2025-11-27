@@ -16,12 +16,6 @@ AWS_ACCESS_SECRET_KEY = os.getenv("AWS_ACCESS_SECRET_KEY")
 BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 SUMMARY_FILE_NAME =  os.getenv("SUMMARY_FILE_NAME") 
 
-# SUMMARY_FILE_PATH = BUCKET_NAME+ '\mailchimp'
-
-if not API_KEY or not SERVER:
-    raise ValueError("MAILCHIMP_API_KEY or MAILCHIMP_SERVER_PREFIX missing in .env")
-
-
 # Init S3 client
 
 s3_client = boto3.client(
