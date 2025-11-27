@@ -1,99 +1,153 @@
 import os
-from mailchimp_marketing import Client
-from dotenv import load_dotenv
-from mailchimp_marketing.api_client import ApiClientError 
-from datetime import date, datetime, timedelta 
 import json
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
+from mailchimp_marketing import Client
+from mailchimp_marketing.api_client import ApiClientError
+
+
+# Load environment variables
 
 load_dotenv()
+API_KEY = os.getenv("MAILCHIMP_API_KEY")
+SERVER = os.getenv("MAILCHIMP_SERVER_PREFIX")
 
-# Read .env file
-api_key = os.getenv('MAILCHIMP_API_KEY')
-server_prefix = os.getenv('MAILCHIMP_SERVER_PREFIX')
-
-today = date.today()
-
-last_month = today - timedelta(days=60)
-
-yesterday = today - timedelta(days=1)        # end of last week (up to yesterday)
-
-since_create_time = str(last_month) + "T00:00:00+00:00"  # start of last week
-before_create_time = str(yesterday) + "T23:59:59+00:00"      # end of yesterday
+if not API_KEY or not SERVER:
+    raise ValueError("MAILCHIMP_API_KEY or MAILCHIMP_SERVER_PREFIX missing in .env")
 
 
-count = 1000
-offset = 0
+# Create folders
 
+os.makedirs("data", exist_ok=True)
+os.makedirs("data/campaigns", exist_ok=True)
+
+SUMMARY_FILE = "data/campaigns_summary.json"
+
+
+# Load or create persistent summary list
+
+if os.path.exists(SUMMARY_FILE):
+    with open(SUMMARY_FILE, "r") as f:
+        campaign_summary = json.load(f)
+else:
+    campaign_summary = []  # start empty on first run
+
+# Maintain quick lookup for existing campaign IDs
+existing_ids = {c["id"] for c in campaign_summary}
+
+
+# Init Mailchimp client
+
+mailchimp = Client()
+mailchimp.set_config({
+    "api_key": API_KEY,
+    "server": SERVER
+})
+
+
+#Find new campaigns (Daily Scan)
+
+
+# LOOKBACK_DAYS = 2  # scan the last 48 hours
+
+# today = datetime.now() - timedelta(days=LOOKBACK_DAYS)
+
+# start_date = today - timedelta(days=LOOKBACK_DAYS)
+
+
+
+today = datetime.now() - timedelta(days=160)
+start_date = today - timedelta(days=20)
+
+
+since_create_time = f"{start_date}T00:00:00+00:00"
+before_create_time = f"{today}T23:59:59+00:00"
+
+print(f"Scanning for campaigns created between {since_create_time} → {before_create_time}")
 
 try:
-
-    mailchimp = Client()
-    mailchimp.set_config({
-    "api_key": api_key,
-    "server": server_prefix
-    })
-
-    # response = mailchimp.ping.get()
-    # print(response)
-    
     response = mailchimp.campaigns.list(
-        count=count,
-        offset=offset,
+        count=1000,
+        offset=0,
         since_create_time=since_create_time,
         before_create_time=before_create_time
     )
+except ApiClientError as e:
+    print("Mailchimp error:", e.text)
+    exit()
 
-    campaigns = response.get('campaigns', [])  
+campaigns = response.get("campaigns", [])
 
-    all_campaigns_data = []
-
-    if len(campaigns) == 0:
-        print("No campaigns")
-    else: 
-        print(f"Total campaigns: {len(campaigns)}")
-
-        extract_time =datetime.now()
-
-        for campaign in campaigns:
-            campaign_id = campaign["id"]
-
-            try:
-                    clicks = mailchimp.reports.get_campaign_click_details(campaign_id)
-            except  ApiClientError as e:
-                        clicks = {"error": str(e)}
+print(f"Found {len(campaigns)} campaigns in scan window.")
 
 
-            try:
-                    activity  = mailchimp.reports.get_email_activity_for_campaign(campaign_id)
-            except  ApiClientError as e:
-                        activity  = {"error": str(e)}    
+# Append NEW campaigns to master summary
 
 
+new_campaigns = []
 
-            campaign_full = {
-                "campaign": campaign,
-                "clicks": clicks,
-                "activity": activity,
-                "extract_time" : extract_time
-            }
-            
-            all_campaigns_data.append(campaign_full)
+for camp in campaigns:
+    camp_id = camp["id"]
+    if camp_id not in existing_ids:
+        summary = {
+            "id": camp_id,
+            "title": camp.get("settings", {}).get("title", "Untitled"),
+            "send_time": camp.get("send_time", None),
+            "found_time": datetime.utcnow().isoformat()
+        }
+
+        new_campaigns.append(summary)
+        campaign_summary.append(summary)
+        existing_ids.add(camp_id)
+
+print(f"New campaigns added: {len(new_campaigns)}")
+
+# Save updated summary
+with open(SUMMARY_FILE, "w") as f:
+    json.dump(campaign_summary, f, indent=2)
 
 
 
-except ApiClientError as error:
-     print("Error: {}".format(error.text)) 
-except Exception as e:
-    print("Unexpected error:", str(e))
+# STEP 3 — Loop all known campaigns and fetch reports
 
 
-output_filename = "data/mailchimp_campaigns.json"
+print(f"Refreshing reports for {len(campaign_summary)} total campaigns...")
 
-start_str = last_month.strftime("%Y-%m-%d")
-end_str = yesterday.strftime("%Y-%m-%d")
+for camp in campaign_summary:
+    camp_id = camp["id"]
 
-output_filename = f"data/campaigns_{start_str}_to_{end_str}.json"
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
-os.makedirs("data", exist_ok=True)
-with open(output_filename, "w", encoding="utf-8") as f:
-    json.dump(all_campaigns_data, f, indent=2)
+    output_file = f"data/campaigns/{camp_id}_{timestamp}.json"
+
+    print(f" → Updating {camp_id}...")
+
+    try:
+        try:
+            clicks = mailchimp.reports.get_campaign_click_details(camp_id)
+        except ApiClientError as e:
+            clicks = {"error": e.text}
+
+        try:
+            activity = mailchimp.reports.get_email_activity_for_campaign(camp_id)
+        except ApiClientError as e:
+            activity = {"error": e.text}
+
+        full_data = {
+            "campaign_id": camp_id,
+            "title": camp["title"],
+            "send_time": camp["send_time"],
+            "last_updated": datetime.utcnow().isoformat(),
+            "click_details": clicks,
+            "email_activity": activity
+        }
+
+        # Save this campaign file
+        with open(output_file, "w") as f:
+            json.dump(full_data, f, indent=2)
+
+    except Exception as e:
+        print(f"Error updating {camp_id}: {e}")
+
+print("Done.")
+
