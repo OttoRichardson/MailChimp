@@ -4,33 +4,48 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from mailchimp_marketing import Client
 from mailchimp_marketing.api_client import ApiClientError
-
+import boto3
 
 # Load environment variables
 
 load_dotenv()
 API_KEY = os.getenv("MAILCHIMP_API_KEY")
 SERVER = os.getenv("MAILCHIMP_SERVER_PREFIX")
+AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
+AWS_ACCESS_SECRET_KEY = os.getenv("AWS_ACCESS_SECRET_KEY")
+BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
+SUMMARY_FILE_NAME =  os.getenv("SUMMARY_FILE_NAME") 
+
+# SUMMARY_FILE_PATH = BUCKET_NAME+ '\mailchimp'
 
 if not API_KEY or not SERVER:
     raise ValueError("MAILCHIMP_API_KEY or MAILCHIMP_SERVER_PREFIX missing in .env")
 
+
+# Init S3 client
+
+s3_client = boto3.client(
+'s3',
+aws_access_key_id=AWS_ACCESS_KEY,
+aws_secret_access_key=AWS_ACCESS_SECRET_KEY
+)
+
+
+try:
+    obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=SUMMARY_FILE_NAME)
+    campaign_summary = json.loads(obj['Body'].read().decode('utf-8'))
+    print(f"Loaded {len(campaign_summary)} campaigns from S3")
+except s3_client.exceptions.NoSuchKey:
+    print("No existing summary found on S3. Starting empty.")
+    campaign_summary = []
 
 # Create folders
 
 os.makedirs("data", exist_ok=True)
 os.makedirs("data/campaigns", exist_ok=True)
 
-SUMMARY_FILE = "data/campaigns_summary.json"
 
 
-# Load or create persistent summary list
-
-if os.path.exists(SUMMARY_FILE):
-    with open(SUMMARY_FILE, "r") as f:
-        campaign_summary = json.load(f)
-else:
-    campaign_summary = []  # start empty on first run
 
 # Maintain quick lookup for existing campaign IDs
 existing_ids = {c["id"] for c in campaign_summary}
@@ -48,16 +63,16 @@ mailchimp.set_config({
 #Find new campaigns (Daily Scan)
 
 
-# LOOKBACK_DAYS = 2  # scan the last 48 hours
+LOOKBACK_DAYS = 2  # scan the last 48 hours
 
-# today = datetime.now() - timedelta(days=LOOKBACK_DAYS)
+today = datetime.now() - timedelta(days=LOOKBACK_DAYS)
 
-# start_date = today - timedelta(days=LOOKBACK_DAYS)
+start_date = today - timedelta(days=LOOKBACK_DAYS)
 
 
 
-today = datetime.now() - timedelta(days=160)
-start_date = today - timedelta(days=20)
+# today = datetime.now() - timedelta(days=160)
+# start_date = today - timedelta(days=20)
 
 
 since_create_time = f"{start_date}T00:00:00+00:00"
@@ -102,10 +117,13 @@ for camp in campaigns:
 
 print(f"New campaigns added: {len(new_campaigns)}")
 
-# Save updated summary
-with open(SUMMARY_FILE, "w") as f:
-    json.dump(campaign_summary, f, indent=2)
-
+# Save updated summary back to S3
+s3_client.put_object(
+Bucket=BUCKET_NAME,
+Key=SUMMARY_FILE_NAME,
+Body=json.dumps(campaign_summary, indent=2).encode('utf-8')
+)
+print("Updated summary saved to S3")
 
 
 # STEP 3 — Loop all known campaigns and fetch reports
@@ -150,4 +168,5 @@ for camp in campaign_summary:
         print(f"Error updating {camp_id}: {e}")
 
 print("Done.")
+
 
