@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: bike point environment DES4
+    environment: Mail Chimp Environment
     steps:
       - name: Checkout the repo
         uses: actions/checkout@v2
