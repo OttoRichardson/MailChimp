@@ -472,3 +472,173 @@ jobs:
 - steps are the individual actions the job performs.
 - run: a step that can run shell commands
 - uses: prebuilt GitHub Actions
+
+
+## REMOVING OUTDATED CAMPAIGN DATA
+
+Over time, as the Mailchimp extraction runs, multiple JSON files with the same campaign IDs but different timestamps accumulate in S3. These outdated files will also propagate to the RAW table in Snowflake, creating duplicate or superseded campaign data.
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/thinking%20about%20removing%20duplicated%20data.png)
+
+
+In Snowflake, the first staging table uses a ROW_NUMBER calculation to identify the most recent record per campaign. Only the latest version is moved forward for downstream processing.
+
+We also want to periodically remove older campaigns from the RAW table, we use a stored procedure and a scheduled task:
+
+
+Stored Procedure: DELETE_OLD_CAMPAIGN_ROWS_PROC
+```
+CREATE OR REPLACE PROCEDURE DELETE_OLD_CAMPAIGN_ROWS_PROC()
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    DELETE FROM RAW_MAILCHIMP_JSON
+    WHERE (CAMPAIGN_ID, file_ts) IN (
+        SELECT CAMPAIGN_ID, file_ts
+        FROM (
+            SELECT CAMPAIGN_ID, file_ts,
+                   ROW_NUMBER() OVER (PARTITION BY CAMPAIGN_ID ORDER BY file_ts DESC) AS RN
+            FROM RAW_MAILCHIMP_JSON
+        ) t
+        WHERE RN != 1
+    );
+
+    RETURN 'Old campaign rows deleted successfully';
+END;
+$$;
+```
+Scheduled Task: DELETE_OLD_CAMPAIGN_ROWS_TASK
+```
+CREATE OR REPLACE TASK DELETE_OLD_CAMPAIGN_ROWS_TASK
+WAREHOUSE = DATASCHOOL_WH
+SCHEDULE = 'USING CRON 0 10 1,15 * * UTC'  -- Runs twice a month at 10:00 UTC
+AS
+CALL DELETE_OLD_CAMPAIGN_ROWS_PROC();
+```
+
+
+## Managing Outdated Files in s3
+Here we might want to build a python script to remove the  multiple campaign JSON files 
+
+# Transformation
+
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/DBT%20plan%20mailchimp.png)
+
+
+## Source Configuration
+
+```yaml
+version: 2
+
+sources:
+  - name: RAW_MAILCHIMP
+    database: TIL_DATA_ENGINEERING
+    schema: OR_MAILCHIMP
+    tables:
+      - name: RAW_MAILCHIMP_JSON
+        columns:
+          - name: JSON_DATA
+            data_type: variant
+            description: "Raw JSON payload from Mailchimp"
+            data_tests:
+              - not_null
+          - name: CAMPAIGN_ID
+            data_type: STRING
+            description: "Primary key for campaigns"
+            data_tests:
+              - not_null
+          - name: FILE_TS
+            data_type: TIMESTAMP_NTZ
+            description: "Timestamp that the file was extracted"
+            data_tests:
+              - not_null
+        loaded_at_field: FILE_TS
+        freshness:
+          warn_after: {count: 24, period: hour}
+```
+
+> This setup tells dbt where to find the raw JSON table, which column to use for freshness tracking, and basic data tests.
+
+---
+
+### Transformation Workflow
+
+1. **Raw Data Selection**
+
+```sql
+WITH RAW_MAILCHIMP_JSON AS (
+    SELECT * 
+    FROM {{ source('RAW_MAILCHIMP', 'RAW_MAILCHIMP_JSON') }}
+)
+```
+
+* Pulls all raw records from the Mailchimp source table.
+
+2. **Staging & Deduplication**
+
+```sql
+, STG_MAILCHIMP_JSON AS (
+    SELECT 
+        ROW_NUMBER() OVER (PARTITION BY CAMPAIGN_ID ORDER BY file_ts DESC) AS RN,
+        json_data:campaign_id::STRING       AS campaign_id,
+        json_data:title::STRING             AS title,
+        json_data:send_time::STRING         AS send_time,
+        json_data:last_updated::STRING      AS last_updated,
+        json_data:click_details:total_items::NUMBER AS total_clicks,
+        json_data:email_activity:emails::variant  AS email_activity,
+        json_data:click_details:urls_clicked::variant AS click_details
+    FROM RAW_MAILCHIMP_JSON
+)
+```
+
+* Converts JSON fields into structured columns.
+* Assigns a row number (`RN`) to deduplicate campaigns, keeping the latest record by `file_ts`.
+
+3. **Final Selection**
+
+```sql
+SELECT * FROM STG_MAILCHIMP_JSON
+-- WHERE RN = 1
+```
+
+* filter `RN = 1` to retain only the newest record per campaign.
+
+---
+
+### Staging Model
+
+```yaml
+version: 2
+
+models:
+  - name: stg_mailchimp_json
+    description: "Staging model for Mailchimp campaign JSON. Deduplicates campaigns by keeping only the newest file_ts per campaign."
+    columns:
+      - name: campaign_id
+        description: "Unique ID for each campaign."
+        tests:
+          - not_null
+          - unique
+      - name: title
+        description: "Campaign title."
+      - name: send_time
+        description: "Time the campaign was sent."
+      - name: last_updated
+        description: "Timestamp of the last update for the campaign."
+      - name: total_clicks
+        description: "Total clicks recorded in the campaign."
+      - name: email_activity
+        description: "Nested JSON array of email activity events."
+      - name: click_details
+        description: "Nested JSON array of click details for each URL."
+      - name: rn
+        description: "Row number assigned by window function (used for deduplication)."
+```
+
+
+
+
+
