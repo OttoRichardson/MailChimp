@@ -9,11 +9,11 @@ import boto3
 # Load environment variables
 
 load_dotenv()
-API_KEY = os.getenv("MAILCHIMP_API_KEY")
-SERVER = os.getenv("MAILCHIMP_SERVER_PREFIX")
+MAILCHIMP_API_KEY = os.getenv("MAILCHIMP_API_KEY")
+MAILCHIMP_SERVER_PREFIX = os.getenv("MAILCHIMP_SERVER_PREFIX")
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_ACCESS_SECRET_KEY = os.getenv("AWS_ACCESS_SECRET_KEY")
-BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
+AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 SUMMARY_FILE_NAME =  os.getenv("SUMMARY_FILE_NAME") 
 
 # Init S3 client
@@ -26,7 +26,7 @@ aws_secret_access_key=AWS_ACCESS_SECRET_KEY
 
 
 try:
-    obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=SUMMARY_FILE_NAME)
+    obj = s3_client.get_object(Bucket=AWS_BUCKET_NAME, Key=SUMMARY_FILE_NAME)
     campaign_summary = json.loads(obj['Body'].read().decode('utf-8'))
     print(f"Loaded {len(campaign_summary)} campaigns from S3")
 except s3_client.exceptions.NoSuchKey:
@@ -49,8 +49,8 @@ existing_ids = {c["id"] for c in campaign_summary}
 
 mailchimp = Client()
 mailchimp.set_config({
-    "api_key": API_KEY,
-    "server": SERVER
+    "api_key": MAILCHIMP_API_KEY,
+    "server": MAILCHIMP_SERVER_PREFIX
 })
 
 
@@ -113,7 +113,7 @@ print(f"New campaigns added: {len(new_campaigns)}")
 
 # Save updated summary back to S3
 s3_client.put_object(
-Bucket=BUCKET_NAME,
+Bucket=AWS_BUCKET_NAME,
 Key=SUMMARY_FILE_NAME,
 Body=json.dumps(campaign_summary, indent=2).encode('utf-8')
 )
