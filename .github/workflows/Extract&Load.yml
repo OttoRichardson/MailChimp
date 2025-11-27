@@ -1,4 +1,4 @@
-name: MailChimp-Extraction
+name: MailChimp-Extraction-and-Load
 
 on:
   schedule:
