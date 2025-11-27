@@ -380,3 +380,95 @@ FROM RAW_MAILCHIMP_JSON c,
 
      SELECT * FROM BASE_EMAIL_ACTIVITY;
 ```
+
+# Orchestration 
+
+when we come to automating the extraction we need master campaign data to perform our de-duping but we dont wanr to store or publish JSON data directly in the repository.
+Instead, i've used our S3 bucket as the storage layer for both reading and writing to the campaign summary.
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/Master%20file%20in%20S3.png)
+
+This means are script needs adapting in the following ways:
+
+### Loading the Existing Summary From S3
+```
+try:
+    obj = s3_client.get_object(Bucket=AWS_BUCKET_NAME, Key=SUMMARY_FILE_NAME)
+    campaign_summary = json.loads(obj['Body'].read().decode('utf-8'))
+    print(f"Loaded {len(campaign_summary)} campaigns from S3")
+except s3_client.exceptions.NoSuchKey:
+    print("No existing summary found on S3. Starting empty.")
+    campaign_summary = []
+
+```
+
+### Uploading the Updated Summary Back to S3
+
+```
+s3_client.put_object(
+    Bucket=AWS_BUCKET_NAME,
+    Key=SUMMARY_FILE_NAME,
+    Body=json.dumps(campaign_summary, indent=2).encode('utf-8')
+)
+print("Updated summary saved to S3")
+
+```
+
+Using GitHub Actions as our python orchestration tool we can schedule this extraction and the load to run daily 
+
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/github%20action%20path.png)
+
+
+## 1. Add Required credentials into GitHub Environments
+Navigate to your repository.
+Go to Settings → Environments.
+Create a new environment (e.g., dev, uat, prod).
+Add secrets (API keys, passwords, buckets)
+
+## 2: Create a Workflow in YAML 
+
+Here’s the structure we will follow:
+
+```
+on:
+  schedule:
+  #ONCE A DAY AT 8:00
+    - cron: '0 8 * * *' 
+  #ALLOW THE WORKFLOW TO RUN MANUALLY
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: Mail Chimp Environment
+    steps:
+      - name: Checkout the repo
+        uses: actions/checkout@v2
+        
+      - name: Setup python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12.10'
+      - name: Install packages
+        run: pip install -r requirements.txt
+
+      - name: Run the Extract Python script
+      env:
+      SECRET_KEY: ${{secrets.SECRET_KEY}}
+      run: python extract.py
+      
+      - name: Run the Load Python script
+      env:
+      SECRET_KEY: ${{secrets.SECRET_KEY}}
+      run: python load.py
+
+```
+
+- name: – gives your workflow a name.
+- on: – defines when it triggers (scheduled and/or manual).
+- jobs: – defines what you want to happen
+- build: – is the name/ID of a job (can be called anything test, deploy, ingest-data, etc.).
+- runs-on: – specifies the virtual environment (Ubuntu, Windows, macOS).
+- steps are the individual actions the job performs.
+- run: a step that can run shell commands
+- uses: prebuilt GitHub Actions
