@@ -1,4 +1,4 @@
-name: Bike Point Ingestion
+name: MailChimp-Extraction
 
 on:
   schedule:
