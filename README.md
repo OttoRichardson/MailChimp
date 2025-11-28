@@ -638,7 +638,79 @@ models:
         description: "Row number assigned by window function (used for deduplication)."
 ```
 
+## Thinking about viz layer
+
+The question we want to answer is where are users are dropping off in the marketing-to-website funnel
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/activity%20funnel.png)
+
+Granularity
+
+- User-level: Each row corresponds to a single user.
+- Session-level: We track each session separately to capture multi-session behavior.
+- Campaign-level: Identify the originating Mailchimp campaign.
+- Event-level: Track individual actions/events on the website to identify the last interaction before drop-off.
+
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/modeling%20tables.png)
+
+### joining Data Sources 
+
+Mailchimp: base_email_activity
+
+Amplitude: journey analysis (Filtered to events originating from a Mailchimp link using the referrer column.)
+
+Using Emails we can join together the users. for joining to othe right Session, we can use the Event timestamps. we assume session lasts a maximum of 1 hour. so we can join where event times from amplitude arw within a range of 1h from when the email link was clicked in mailchimp
+
+Hence the full schema would be:
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/big%20schema.png)
+
+## In DBT
+
+```
+WITH mailchimp_email_activity AS (
+
+SELECT 
+
+    activity_id,
+    campaign_id,
+    email_address,
+    action,
+    timestamp,
+    timestamp AS SESSION_TIME_START_RANGE,
+    DATEADD(HOUR, 1, timestamp) AS SESSION_TIME_END_RANGE,
+    ip
+
+FROM  {{ ref('otto__base__email_activity') }}  
+
+)
+
+SELECT
+    activity_id,
+    campaign_id,
+    email_address,
+    COALESCE(action, EVENT_TYPE) AS EVENT_TYPE,
+    COALESCE(timestamp, EVENT_TIME) AS EVENT_TIME ,
+    DATEADD(HOUR, 1, timestamp) AS SESSION_TIME_END_RANGE,
+    ip
 
 
 
+
+FROM mailchimp_email_activity M
+
+JOIN  {{ref('Amplitude_Journey_Analysis_Containing_Mailchimp_Email')}} A
+
+on 
+        M.EMAIL_ADDRESS = A.EMAIL 
+    AND EVENT_TIME > SESSION_TIME_START_RANGE 
+    AND EVENT_TIME < SESSION_TIME_END_RANGE
+
+```
+
+Final DAG
+
+![Alt text](https://github.com/OttoRichardson/MailChimp/blob/main/images/full%20dag%20amplitude%20and%20mailchimp%20.png
+)
 
