@@ -1,11 +1,11 @@
 name: MailChimp-Extraction-and-Load
 
-on:
-  schedule:
-  #ONCE A DAY AT 8:00
-    - cron: '0 8 * * *' 
-  #ALLOW THE WORKFLOW TO RUN MANUALLY
-  workflow_dispatch:
+# on:
+#   schedule:
+#   #ONCE A DAY AT 8:00
+#     - cron: '0 8 * * *' 
+#   #ALLOW THE WORKFLOW TO RUN MANUALLY
+#   workflow_dispatch:
 
 jobs:
   build:
